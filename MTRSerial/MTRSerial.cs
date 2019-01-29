@@ -120,7 +120,7 @@ namespace MTRSerial
             
         }
 
-        public bool CloseAndReopenSerialPort(bool disableALSCalibrationFactors = false)
+        public bool CloseAndReopenSerialPort()
         {
             CloseSerialPort();
             Thread.Sleep(500);// The best practice for any application is to wait for some amount of time after calling the Close method before attempting to call the Open method, as the port may not be closed instantly. From:https://msdn.microsoft.com/en-us/library/system.io.ports.serialport.close.aspx
