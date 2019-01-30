@@ -59,10 +59,6 @@ namespace MTRSerial
 
         public DateTime GetPowerUpTime_utc => _powerUpTime_utc.ToUniversalTime();
 
-        /// <summary>
-        /// /ST - Status
-        /// Will make the MTR to send a Status-message
-        /// </summary>
         public void AskFromMTR(CommandsToMTR.CommandName command, byte[] binary = null)
         {
             var cmd = GetCommand(command, binary);
@@ -71,7 +67,7 @@ namespace MTRSerial
 
         private string GetCommand(CommandsToMTR.CommandName command, byte[] binary = null)
         {
-            if(command == CommandsToMTR.CommandName.SpoolBinary || command == CommandsToMTR.CommandName.GetMessageBinary && binary == null) throw new Exception("Binary content missing.")
+            if(command == CommandsToMTR.CommandName.SpoolBinary || command == CommandsToMTR.CommandName.GetMessageBinary && binary == null) throw new Exception("Binary content missing.");
             switch (command)
             {
                 case CommandsToMTR.CommandName.Status: return "/ST";
@@ -88,45 +84,44 @@ namespace MTRSerial
         public virtual void SendData(string cmd)
         {
             if(string.IsNullOrEmpty(cmd)) return;
-            if(cmd.Contains(@"R1"))
+            if(cmd.Contains(@"/NS"))
             {
                 _powerUpTime_utc = DateTime.UtcNow;
             }
 
             WaitForReply(cmd);
 
-                _waitAck = true;
-                if(cmd.Contains('T'))
-                {
-                    _stsArmed = true;
-                }
-                try
-                {
-                    _serialPort.Write(cmd + @"\r");
-                }
-                catch(Exception ex)
-                {
-                    if(MTRCommunication != null)
-                    {
-                        var infoArgs = CreateInfoArgs(@"Serial port data sending failed for the command beneath this line, check exception from application log");
-                        MTRCommunication(this, infoArgs);
-                    }
-                    SerialPortErrorReceived(this, null);
-                    // TODO some logging
-                    //Logger.AddMessageToLogQueue(@"Serial port data sending failed");
-                    //Logger.FlushLogQueue();
-                    return;
-                }
-                _lastCommandSent = DateTime.Now.Ticks / DefaultValues.SystemTickDivider;
+            _waitAck = true;
+            if(cmd.Contains('T'))
+            {
+                _stsArmed = true;
+            }
+            try
+            {
+                _serialPort.Write(cmd + @"\r");
+            }
+            catch(Exception ex)
+            {
                 if(MTRCommunication != null)
                 {
-                    var command = cmd.Substring(0, 1);
-                    var data = string.Empty;
-                    if(cmd.Length > 1) data = cmd.Substring(1);
-                    var eventArgs = new MTRCommandEventArgs { Command = command, Data = data, Identifier = @"OUT", DebugText = "debug" };
-                    MTRCommunication(this, eventArgs);
+                    var infoArgs = CreateInfoArgs(@"Serial port data sending failed for the command beneath this line, check exception from application log");
+                    MTRCommunication(this, infoArgs);
                 }
-            
+                SerialPortErrorReceived(this, null);
+                // TODO some logging
+                //Logger.AddMessageToLogQueue(@"Serial port data sending failed");
+                //Logger.FlushLogQueue();
+                return;
+            }
+            _lastCommandSent = DateTime.Now.Ticks / DefaultValues.SystemTickDivider;
+            if(MTRCommunication != null)
+            {
+                var command = cmd.Substring(0, 1);
+                var data = string.Empty;
+                if(cmd.Length > 1) data = cmd.Substring(1);
+                var eventArgs = new MTRCommandEventArgs { Command = command, Data = data, Identifier = @"OUT", DebugText = "debug" };
+                MTRCommunication(this, eventArgs);
+            }
         }
 
         public bool CloseAndReopenSerialPort()
@@ -248,7 +243,7 @@ namespace MTRSerial
         public bool EnsureCommunicationToPerimeter()
         {
             _waitingCommunicationCheckAck = true;
-            SendData(@"Z"); // TODO change command
+            SendData(@"/ST"); 
             int i = 0;
             while(i < 20 && _waitingCommunicationCheckAck)
             {
