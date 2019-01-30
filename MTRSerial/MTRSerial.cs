@@ -5,6 +5,7 @@ using System.IO.Ports;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
+using MTRSerial.Enumerations;
 using MTRSerial.ValueObjects;
 
 namespace MTRSerial
@@ -41,15 +42,12 @@ namespace MTRSerial
         private volatile int _communicationErrorsCount;               // Counter for communication errors
         private volatile bool _waitAck;
         private volatile bool _stsArmed;
-        private volatile bool _reactionTimeArmed;
         private DateTime _powerUpTime_utc;
-        private bool _readProxOnce;
         private readonly object _commLock = new object();
         private long _lastKeyPressFromTestStart_ms;
         private long _lastStsAcknowledgedMs;
         private long _lastAcknowledged_ms = 0;
         private SerialPort _serialPort;
-        private volatile Timer _keepAliveTimer;
         private volatile bool _waitingCommunicationCheckAck;
         private readonly TimerCallback _timerCallbackDelegate;
         private long _lastCommandSent;
@@ -62,13 +60,29 @@ namespace MTRSerial
         public DateTime GetPowerUpTime_utc => _powerUpTime_utc.ToUniversalTime();
 
         /// <summary>
-        /// Writes.
+        /// /ST - Status
+        /// Will make the MTR to send a Status-message
         /// </summary>
-        public void WriteTo()
+        public void AskFromMTR(CommandsToMTR.CommandName command, byte[] binary = null)
         {
-            var cmd = @"P";
-            cmd += @",1";
+            var cmd = GetCommand(command, binary);
             SendData(cmd);
+        }
+
+        private string GetCommand(CommandsToMTR.CommandName command, byte[] binary = null)
+        {
+            if(command == CommandsToMTR.CommandName.SpoolBinary || command == CommandsToMTR.CommandName.GetMessageBinary && binary == null) throw new Exception("Binary content missing.")
+            switch (command)
+            {
+                case CommandsToMTR.CommandName.Status: return "/ST";
+                case CommandsToMTR.CommandName.Spool: return "/SA";
+                case CommandsToMTR.CommandName.SpoolBinary: return "/SB" + binary;
+                case CommandsToMTR.CommandName.NewSession: return "/NS";
+                case CommandsToMTR.CommandName.GetMessageBinary: return "/GB" + binary;
+                case CommandsToMTR.CommandName.SetClock: return "/SC" + binary;
+                case CommandsToMTR.CommandName.ClearRingbuffer: return "/CL";
+                default: return string.Empty;
+            }
         }
 
         public virtual void SendData(string cmd)
@@ -77,11 +91,6 @@ namespace MTRSerial
             if(cmd.Contains(@"R1"))
             {
                 _powerUpTime_utc = DateTime.UtcNow;
-            }
-            if(cmd.Contains(@"X1,"))
-            {
-                //command for reading prox values once
-                _readProxOnce = true;
             }
 
             WaitForReply(cmd);
@@ -136,8 +145,6 @@ namespace MTRSerial
             {
                 try
                 {
-                    if(_keepAliveTimer != null) _keepAliveTimer.Dispose();
-                    _keepAliveTimer = null;
                     _serialPort.Close();
                     if(MTRCommunication != null)
                     {
@@ -176,7 +183,6 @@ namespace MTRSerial
                 MTRResponseData.Reset();
                 ResetCommunicationErrorsCount();
                 _lastKeyPressFromTestStart_ms = 0;
-                _keepAliveTimer = new Timer(_timerCallbackDelegate, null, 10000, 10000);
                 if(SerialPortOpened != null)
                 {
                     SerialPortOpened(this, EventArgs.Empty);
@@ -418,8 +424,6 @@ namespace MTRSerial
                 if(_lastStsAcknowledgedMs > 0)
                 {
                     MTRResponseData.STSAcknowledgedDelay_ms = _lastStsAcknowledgedMs - _lastKeyPressFromTestStart_ms; // For checking and reporting the time delay between user press and STS
-                    _stsArmed = false;
-                    _reactionTimeArmed = true;
                 }
             }
         }
@@ -491,10 +495,10 @@ namespace MTRSerial
                 // LOGException new serialPort instance
                 _serialPort = new SerialPort(serialPortNames[portIndex])
                 {
-                    BaudRate = 921600,
-                    DataBits = 8,
-                    Parity = Parity.Even,
-                    StopBits = StopBits.One,
+                    BaudRate = ComSettings.BaudRate,
+                    DataBits = ComSettings.DataBits,
+                    Parity = ComSettings.Parity,
+                    StopBits = ComSettings.StopBits,
                     DtrEnable = false,
                     RtsEnable = false,
                     ReadTimeout = 500,
