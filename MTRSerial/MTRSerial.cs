@@ -71,7 +71,7 @@ namespace MTRSerial
 
         private string GetCommand(CommandsToMTR.CommandName command, byte[] binary = null)
         {
-            if(command == CommandsToMTR.CommandName.SpoolBinary || command == CommandsToMTR.CommandName.GetMessageBinary && binary == null) throw new Exception("Binary content missing.")
+            if (command == CommandsToMTR.CommandName.SpoolBinary || command == CommandsToMTR.CommandName.GetMessageBinary && binary == null) throw new Exception("Binary content missing.");
             switch (command)
             {
                 case CommandsToMTR.CommandName.Status: return "/ST";
