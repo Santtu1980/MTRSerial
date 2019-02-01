@@ -38,8 +38,6 @@ namespace MTRSerial
         public event EventHandler<EventArgs> CommsErrorCountChanged;
         public event EventHandler<EventArgs> SerialPortOpened;
         public event EventHandler<EventArgs> SerialPortClosed;
-        public event EventHandler<EventArgs> HardwareErrorOccurred;
-        public event EventHandler<EventArgs> KeyPressed;
 
 
         private volatile int _communicationErrorsCount;               // Counter for communication errors
@@ -47,13 +45,10 @@ namespace MTRSerial
         private volatile bool _stsArmed;
         private DateTime _powerUpTime_utc;
         private readonly object _commLock = new object();
-        private long _lastKeyPressFromTestStart_ms;
         private long _lastStsAcknowledgedMs;
-        private long _lastAcknowledged_ms = 0;
         private SerialPort _serialPort;
         private volatile bool _waitingCommunicationCheckAck;
         private long _lastCommandSent;
-        private DateTime _acknowledgeFromMTRDateTime = DateTime.MinValue;
 
         public MTRSerialPort()
         {
@@ -129,7 +124,6 @@ namespace MTRSerial
             var success = InitSerialPort();
             if(_serialPort != null && success)
             {
-                MTRResponseData.Reset();
                 ResetCommunicationErrorsCount();
 
                 SerialPortOpened?.Invoke(this, EventArgs.Empty);
@@ -216,27 +210,6 @@ namespace MTRSerial
             return !_waitingCommunicationCheckAck;
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="acknowledgedTime"></param>
-        /// <returns></returns>
-        public long GetMTRActiveTime(out DateTime acknowledgedTime)
-        {
-            var before = MTRResponseData.AcknowledgedTime_ms;
-            Thread.Sleep(1000);
-            SendData(@"/ST");
-            var waited = 0;
-            while(MTRResponseData.AcknowledgedTime_ms == before && waited < 2000)
-            {
-                Thread.Sleep(100);
-                waited += 100;
-            }
-
-            acknowledgedTime = _acknowledgeFromMTRDateTime;
-            return MTRResponseData.AcknowledgedTime_ms;
-        }
-
         private void SendKeepAliveIfNecessary()
         {
             if(DateTime.Now.Ticks / DefaultValues.SystemTickDivider - _lastCommandSent > 10000 && IsSerialPortOpen())
@@ -279,10 +252,7 @@ namespace MTRSerial
             WaitForReply(cmd);
 
             _waitAck = true;
-            if(cmd.Contains('T'))
-            {
-                _stsArmed = true;
-            }
+
             try
             {
                 _serialPort.Write(cmd + @"\r");
@@ -356,11 +326,11 @@ namespace MTRSerial
 
             var cmd = rxString[6];
             var data = rxString;
-            //if(MTRCommunication != null)
-            //{
-            //    var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
-            //    MTRCommunication(this, eventArgs);
-            //}
+            if(MTRCommunication != null)
+            {
+                var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
+                MTRCommunication(this, eventArgs);
+            }
 
             switch(cmd)
             {
@@ -368,7 +338,7 @@ namespace MTRSerial
                     HandleMTRDataMessage(data);
                     break;
                 case 'S':
-                    HandleStatusMessage(data);
+                    HandleMTRStatusMessage(data);
                     break;
                 default:
                     IncreaseCommunicationErrorsCount();
@@ -454,6 +424,68 @@ namespace MTRSerial
                 var filler = data.Substring(160 + checkPointDataPosition, 1);
 
                 MTRDataStrings.CheckPoints.Add(new []{codeN, timeN, info, checkSum, filler});
+            }
+
+            var mtrData = ConvertDataStringToTypeData(MTRDataStrings);
+            var listDatas = new List<MTRData>();
+            listDatas.Add(mtrData);
+            WriteValuesToFile(listDatas);
+        }
+
+        private void HandleMTRStatusMessage(string data)
+        {
+            //MTR--datamessage
+            //    ----------------
+            //Fieldname     # bytes
+            //Preamble      4 FFFFFFFF(hex)(4 "FF"'s never occur "inside" a message).
+            //Package -size 1 number of bytes excluding preamble(= 230)
+            //Package -type 1 'M' as "MTR-datamessage".
+            //MTR - id      2 Serial number of MTR2; Least significant byte first
+            //Timestamp     6 Binary Year, Month, Day, Hour, Minute, Second
+            //TS - [ms]     2 Milliseconds NOT YET USED, WILL BE 0 IN THIS VERSION
+            //Package#      4 Binary Counter, from 1 and up; Least sign byte first
+            //Card - id     3 Binary, Least sign byte first
+            //Producweek 1  0 - 53; 0 when package is retrived from "history"
+            //Producyear 1  94 - 99,0 -..X; 0 when package is retrived from "history"
+            //ECardHeadSum  1 Headchecksum from card; 0 when package is retrived from "history"
+
+            //The following fields are repeated 50 times:
+            //CodeN         1 ControlCode; unused positions have 0
+            //TimeN         2 Time binary seconds.Least sign. first, Most sign. last; unused: 0
+            //ASCII string  56 Various info depending on ECard - type; 20h when retr.from "history"(See ASCIIstring)
+            //Checksum      1 Binary SUM(MOD 256) of all bytes including Preamble
+            //NULL - Filler 1 Binary 0(to avoid potential 5 FF's. Making it easier to haunt PREAMBLE
+            //    ----------------------------------------
+            //Size 234
+
+
+            var MTRDataStrings = new MTRDataString();
+            MTRDataStrings.Preamble = data.Substring(0, 4); // Ensure the message start with preamble
+            MTRDataStrings.PackageSize = data.Substring(4); // Packet size, should be 230 when datamessage
+            MTRDataStrings.PackageType = data.Substring(5); // Packet type, should be M as MTR message
+            MTRDataStrings.MtrSerialNo = data.Substring(6, 2); //serialNumber of the MTR reader
+            MTRDataStrings.TimeStamp = data.Substring(8, 6); // binary year, month day, hour, minute, second
+            MTRDataStrings.Time_ms = data.Substring(14, 2); // Time is not yet in use
+            MTRDataStrings.PackageNo = data.Substring(15, 4); // counter from 1 to up
+            MTRDataStrings.CardId = data.Substring(19, 3); // binary, least sign first
+            // Next tree is used when data retrived from history
+            //MTRData.ProductWeek = data.Substring(22, 53);
+            //MTRData.ProductYear = data.Substring(94,5);
+            //MTRData.ECardHeadSum = data.Substring(100);
+
+            List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
+
+            for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
+            {
+                var checkPointDataPosition = 61 * checkPointNo;
+                var checkPoint = new MTRResponseCheckPoint();
+                var codeN = data.Substring(100 + checkPointDataPosition, 1);
+                var timeN = data.Substring(102 + checkPointDataPosition, 2);
+                var info = data.Substring(103 + checkPointDataPosition, 56);
+                var checkSum = data.Substring(159 + checkPointDataPosition, 1);
+                var filler = data.Substring(160 + checkPointDataPosition, 1);
+
+                MTRDataStrings.CheckPoints.Add(new[] { codeN, timeN, info, checkSum, filler });
             }
 
             var mtrData = ConvertDataStringToTypeData(MTRDataStrings);
