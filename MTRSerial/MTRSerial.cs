@@ -35,7 +35,6 @@ namespace MTRSerial
     public class MTRSerialPort
     {
         //for listening to reads and writes
-        public event EventHandler<EventArgs> PerimeterCommunicationFailure;
         public event EventHandler<MTRCommandEventArgs> MTRCommunication;
         public event EventHandler<EventArgs> CommsErrorCountChanged;
         public event EventHandler<EventArgs> SerialPortOpened;
@@ -45,16 +44,14 @@ namespace MTRSerial
 
         private volatile int _communicationErrorsCount;               // Counter for communication errors
         private volatile bool _waitAck;
-        private DateTime _powerUpTime_utc;
         private readonly object _commLock = new object();
-        private long _lastStsAcknowledgedMs;
         private SerialPort _serialPort;
-        private volatile bool _waitingCommunicationCheckAck;
-        private long _lastCommandSent;
+        public MTRResponse EmitDataMtrResponse = null;
+        private int _lastEmitRead = 0;
         private const int xorDF = 223; // Hexadecimal = "DF";
-        
 
 
+        private List<int> buffer = new List<int>();
 
         protected virtual void OnEmitDataChanged()
         {
@@ -68,10 +65,7 @@ namespace MTRSerial
             _serialPort = new SerialPort();
         }
 
-        /// <summary>
-        /// Returns the serial communication starting time (UTC)
-        /// </summary>
-        public DateTime GetPowerUpTime_utc => _powerUpTime_utc.ToUniversalTime();
+        public string GetComPortName => _serialPort.PortName;
 
         /// <summary>
         /// Send command to the MTR
@@ -192,50 +186,34 @@ namespace MTRSerial
             }
             lock(_commLock)
             {
-                var buffer = new List<int>();
+                int lastReadByte = 0;
+                var startFound = false;
                 var threw = false;
                 while(threw == false)
                 {
                     try
                     {
+                        if(_serialPort.BytesToRead < 1) threw = false;
                         var readByteXor = _serialPort.ReadByte() ^ xorDF;
-                        buffer.Add(readByteXor);
+
+                        if (lastReadByte.Equals(255) && readByteXor.Equals(255))
+                        {
+                            startFound = true;
+                        }
+                        if(startFound)
+                        {
+                            buffer.Add(readByteXor);
+                            if (buffer.Count > 217) threw = true;
+                        }
+
+                        lastReadByte = readByteXor;
                     }
                     catch (Exception ex)
                     {
                         threw = true;
                     }
-
-                    if (buffer.Count > 234) threw = true;
                 }
                 ParseRxString(buffer);
-            }
-        }
-        public MTRResponse EmitDataMtrResponse = null;
-
-
-        /// <summary>
-        /// Just asking a status to check if connection is ok
-        /// </summary>
-        /// <returns><c>False</c> if  there isn't connection after 20 tries.<c>True</c> if there came some message</returns>
-        public bool EnsureCommunicationToMTR()
-        {
-            _waitingCommunicationCheckAck = true;
-            SendData(@"/ST"); 
-            var triesToWaitAck = 0;
-            while(triesToWaitAck < 20 && _waitingCommunicationCheckAck)
-            {
-                Thread.Sleep(100);
-                triesToWaitAck++;
-            }
-            return !_waitingCommunicationCheckAck;
-        }
-
-        private void SendKeepAliveIfNecessary()
-        {
-            if(DateTime.Now.Ticks / DefaultValues.SystemTickDivider - _lastCommandSent > 10000 && IsSerialPortOpen())
-            {
-                SendData(@"/ST");
             }
         }
 
@@ -265,10 +243,6 @@ namespace MTRSerial
         private void SendData(string cmd)
         {
             if(string.IsNullOrEmpty(cmd)) return;
-            if(cmd.Contains(@"/NS"))
-            {
-                _powerUpTime_utc = DateTime.UtcNow;
-            }
 
             WaitForReply(cmd);
 
@@ -285,13 +259,12 @@ namespace MTRSerial
                     var infoArgs = CreateInfoArgs(@"Serial port data sending failed for the command beneath this line, check exception from application log");
                     MTRCommunication(this, infoArgs);
                 }
-                SerialPortErrorReceived(this, null);
                 // TODO some logging
                 //Logger.AddMessageToLogQueue(@"Serial port data sending failed");
                 //Logger.FlushLogQueue();
                 return;
             }
-            _lastCommandSent = DateTime.Now.Ticks / DefaultValues.SystemTickDivider;
+
             if(MTRCommunication != null)
             {
                 var command = cmd.Substring(0, 1);
@@ -337,11 +310,7 @@ namespace MTRSerial
                 return;
             }
 
-            var startByte1 = rxByteList[0];
-            var startByte2 = rxByteList[1];
-            
-
-            if (startByte1.Equals(255) && startByte2.Equals(255))
+            if (rxByteList[0].Equals(255) && rxByteList[1].Equals(255))
             {
                 if (rxByteList[2].Equals(255) && rxByteList[3].Equals(255))
                 {
@@ -350,11 +319,11 @@ namespace MTRSerial
                     var cmd = rxByteList[6];
 
                     var data = string.Join(",", rxByteList);
-                    //if(MTRCommunication != null)
-                    //{
-                    //    var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
-                    //    MTRCommunication(this, eventArgs);
-                    //}
+                    if(MTRCommunication != null)
+                    {
+                        var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
+                        MTRCommunication(this, eventArgs);
+                    }
 
                     switch(cmd)
                     {
@@ -377,8 +346,6 @@ namespace MTRSerial
                     HandleMTRResponseMessage(rxByteList);
                 }
             }
-
-            SendKeepAliveIfNecessary();
         }
         
         private void HandleMTRDataMessage(string data)
@@ -510,7 +477,7 @@ namespace MTRSerial
             var emit = rxByteList[4].ToString("X") + rxByteList[3].ToString("X") + rxByteList[2].ToString("X");
             MTRResponse mtrResponse = new MTRResponse
             {
-                EmitCardNumber = int.Parse(emit, System.Globalization.NumberStyles.HexNumber),
+                EmitCardNumber = int.Parse(emit, NumberStyles.HexNumber),
                 NotInUse1 = rxByteList[5],
                 EmitCardProdWeek = rxByteList[6],
                 EmitCardProdYear = rxByteList[7],
@@ -529,32 +496,16 @@ namespace MTRSerial
             for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
             {
                 var checkPointDataPosition = 3 * checkPointNo;
-                var checkPoint = new MTRDataCheckPoint();
                 var codeN = rxByteList[checkPointDataPosition];
-                var timeN = rxByteList[checkPointDataPosition + 1] << 8 | rxByteList[checkPointDataPosition + 2];
+                var timeN = int.Parse(rxByteList[checkPointDataPosition + 2].ToString("X") + rxByteList[checkPointDataPosition + 1].ToString("X"), NumberStyles.HexNumber);
 
                 checkPoints.Add(new MTRDataCheckPoint { CodeN = codeN, TimeN_s = timeN });
             }
 
+            _lastEmitRead = mtrResponse.EmitCardNumber;
             mtrResponse.CheckPoints = checkPoints;
             EmitDataMtrResponse = mtrResponse;
             OnEmitDataChanged();
-            rxByteList.RemoveRange(0, 230);
-        }
-        private void WriteValuesToFile(List<int> data)
-        {
-            try
-            {
-                var fileName = @"C:\Temp\mtr.xml";
-                var serializerObj4 = new XmlSerializer(typeof(List<int>));
-                TextWriter writeFileStream4 = new StreamWriter(fileName, false);
-                serializerObj4.Serialize(writeFileStream4, data);
-                writeFileStream4.Close();
-            }
-            catch(Exception ex)
-            {
-                throw ex;
-            }
         }
 
         private MTRDataMessage ConvertDataStringToTypeData(MTRDataMessageString dataString)
@@ -593,9 +544,7 @@ namespace MTRSerial
 
             return mtrData;
         }
-
-
-
+        
         private bool CheckModulo(List<int> itemsToCheck)
         {
             var sum = 0;
@@ -607,24 +556,7 @@ namespace MTRSerial
             if(sum % 256 == 0) return true;
             return false;
         }
-
-        private void HandleAck(string data)
-        {
-            _waitAck = false;
-            if(_waitingCommunicationCheckAck) _waitingCommunicationCheckAck = false;
-
-            {
-                if(!long.TryParse(data, NumberStyles.Integer, CultureInfo.InvariantCulture, out _lastStsAcknowledgedMs))
-                    return;
-
-                if(_lastStsAcknowledgedMs > 0)
-                {
-                    //MTRResponseData.STSAcknowledgedDelay_ms = _lastStsAcknowledgedMs - _lastKeyPressFromTestStart_ms; // For checking and reporting the time delay between user press and STS
-                }
-            }
-        }
-
-
+        
         private bool InitSerialPort()
         {
             // LOGException serialPort.IsOpen
@@ -666,7 +598,7 @@ namespace MTRSerial
                     if(_serialPort.IsOpen)
                     {
                         _serialPort.DataReceived += DataReceived;
-                        _serialPort.ErrorReceived += SerialPortErrorReceived;
+                        //_serialPort.ErrorReceived += SerialPortErrorReceived; // TODO Need some error handling
 
                         success = true;
                     }
@@ -683,15 +615,7 @@ namespace MTRSerial
             }
             return success;
         }
-
-        private void SerialPortErrorReceived(object sender, SerialErrorReceivedEventArgs e)
-        {
-            if(PerimeterCommunicationFailure != null)
-            {
-                PerimeterCommunicationFailure(this, EventArgs.Empty);
-            }
-        }
-
+        
         private MTRCommandEventArgs CreateInfoArgs(string message)
         {
             return new MTRCommandEventArgs
