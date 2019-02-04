@@ -40,6 +40,7 @@ namespace MTRSerial
         public event EventHandler<EventArgs> CommsErrorCountChanged;
         public event EventHandler<EventArgs> SerialPortOpened;
         public event EventHandler<EventArgs> SerialPortClosed;
+        public event EventHandler EmitDataReceived;
 
 
         private volatile int _communicationErrorsCount;               // Counter for communication errors
@@ -50,6 +51,17 @@ namespace MTRSerial
         private SerialPort _serialPort;
         private volatile bool _waitingCommunicationCheckAck;
         private long _lastCommandSent;
+        private const int xorDF = 223; // Hexadecimal = "DF";
+        
+
+
+
+        protected virtual void OnEmitDataChanged()
+        {
+            if(EmitDataReceived != null) EmitDataReceived(this, EventArgs.Empty);
+        }
+
+
 
         public MTRSerialPort()
         {
@@ -166,8 +178,6 @@ namespace MTRSerial
             return _serialPort != null && _serialPort.IsOpen;
         }
 
-        private int xorDF = 223; // Hexadecimal = "DF";
-
         /// <summary>
         /// Event handler when some data received from the serial port
         /// </summary>
@@ -182,30 +192,26 @@ namespace MTRSerial
             }
             lock(_commLock)
             {
+                var buffer = new List<int>();
                 var threw = false;
                 while(threw == false)
                 {
                     try
                     {
-                        var readByteXOR = _serialPort.ReadByte() ^ xorDF;
-                        buffer.Add(readByteXOR);
+                        var readByteXor = _serialPort.ReadByte() ^ xorDF;
+                        buffer.Add(readByteXor);
                     }
                     catch (Exception ex)
                     {
                         threw = true;
                     }
                 }
-
-                WriteValuesToFile(buffer);
                 ParseRxString(buffer);
             }
         }
-        public List<int> buffer = new List<int>();
+        public MTRResponse EmitDataMtrResponse = null;
 
-        public void ClearBuffer()
-        {
-            buffer = new List<int>();
-        }
+
         /// <summary>
         /// Just asking a status to check if connection is ok
         /// </summary>
@@ -323,7 +329,7 @@ namespace MTRSerial
 
         private void ParseRxString(List<int> rxByteList)
         {
-            if(rxByteList.Count <= 1) // && rxString != @"C")
+            if(rxByteList.Count <= 1)
             {
                 IncreaseCommunicationErrorsCount();
                 return;
@@ -350,10 +356,12 @@ namespace MTRSerial
 
                     switch(cmd)
                     {
-                        case 'M':
+                        case 77: // 'M':
+                            if(rxByteList.Count < 230 || size != 230) return;
                             HandleMTRDataMessage(data);
                             break;
-                        case 'S':
+                        case 83: //'S':
+                            if(rxByteList.Count < 59 || size != 59) return;
                             HandleMTRStatusMessage(data);
                             break;
                         default:
@@ -363,73 +371,14 @@ namespace MTRSerial
                 }
                 else
                 {
-                    MTRResponse mtrResponse = new MTRResponse();
-                    mtrResponse.EmitCardNumber = int.Parse(rxByteList[2].ToString("X") + rxByteList[3].ToString("X") + rxByteList[4].ToString("X"));
-                    mtrResponse.NotInUse1 = rxByteList[5];
-                    mtrResponse.EmitCardProdWeek = rxByteList[6];
-                    mtrResponse.EmitCardProdYear = rxByteList[7];
-                    mtrResponse.NotInUse2 = rxByteList[8];
-                    var cardCheckByte = rxByteList[9];
-
-                    if (!CheckModulo(rxByteList.GetRange(2, 8)))
-                    {
-                        IncreaseCommunicationErrorsCount();
-                        throw new Exception("Emit card checksum failed");
-                    }
-
-                    List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
-
-                    for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
-                    {
-                        var checkPointDataPosition = 3 * checkPointNo;
-                        var checkPoint = new MTRResponseCheckPoint();
-                        var codeN = rxByteList[checkPointDataPosition];
-                        var timeN = rxByteList[checkPointDataPosition+1] << 8 | rxByteList[checkPointDataPosition + 2];
-
-                        checkPoints.Add(new MTRResponseCheckPoint{CodeN = codeN, TimeN_s = timeN});
-                    }
-
-                    mtrResponse.CheckPoints = checkPoints;
+                    if(rxByteList.Count < 217) return;
+                    HandleMTRResponseMessage(rxByteList);
                 }
             }
 
             SendKeepAliveIfNecessary();
         }
-
-        private bool CheckModulo(List<int> itemsToCheck)
-        {
-            var sum = 0;
-            foreach (var item in itemsToCheck)
-            {
-                sum += item;
-            }
-
-            if (sum % 256 == 0) return true;
-            return false;
-        }
-
-        private void HandleAck(string data)
-        {
-            _waitAck = false;
-            if(_waitingCommunicationCheckAck) _waitingCommunicationCheckAck = false;
-            
-            {
-                if(!long.TryParse(data, NumberStyles.Integer, CultureInfo.InvariantCulture, out _lastStsAcknowledgedMs))
-                    return;
-
-                if(_lastStsAcknowledgedMs > 0)
-                {
-                    //MTRResponseData.STSAcknowledgedDelay_ms = _lastStsAcknowledgedMs - _lastKeyPressFromTestStart_ms; // For checking and reporting the time delay between user press and STS
-                }
-            }
-        }
-
-
-        private void HandleDeviceDiagnostics(string data)
-        {
-           // MTRResponseData.DeviceDiagnostics = data;
-        }
-
+        
         private void HandleMTRDataMessage(string data)
         {
             //MTR--datamessage
@@ -457,7 +406,7 @@ namespace MTRSerial
             //Size 234
 
 
-            var MTRDataStrings = new MTRDataString();
+            var MTRDataStrings = new MTRDataMessageString();
             MTRDataStrings.Preamble = data.Substring(0, 4); // Ensure the message start with preamble
             MTRDataStrings.PackageSize = data.Substring(4); // Packet size, should be 230 when datamessage
             MTRDataStrings.PackageType = data.Substring(5); // Packet type, should be M as MTR message
@@ -471,12 +420,12 @@ namespace MTRSerial
             //MTRData.ProductYear = data.Substring(94,5);
             //MTRData.ECardHeadSum = data.Substring(100);
 
-            List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
+            List<MTRDataCheckPoint> checkPoints = new List<MTRDataCheckPoint>();
 
             for (int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
             {
                 var checkPointDataPosition = 61 * checkPointNo;
-                var checkPoint = new MTRResponseCheckPoint();
+                var checkPoint = new MTRDataCheckPoint();
                 var codeN = data.Substring(100 + checkPointDataPosition, 1);
                 var timeN = data.Substring(102 + checkPointDataPosition, 2);
                 var info = data.Substring(103 + checkPointDataPosition, 56);
@@ -519,7 +468,7 @@ namespace MTRSerial
             //Size 234
 
 
-            var MTRDataStrings = new MTRDataString();
+            var MTRDataStrings = new MTRDataMessageString();
             MTRDataStrings.Preamble = data.Substring(0, 4); // Ensure the message start with preamble
             MTRDataStrings.PackageSize = data.Substring(4); // Packet size, should be 230 when datamessage
             MTRDataStrings.PackageType = data.Substring(5); // Packet type, should be M as MTR message
@@ -533,12 +482,12 @@ namespace MTRSerial
             //MTRData.ProductYear = data.Substring(94,5);
             //MTRData.ECardHeadSum = data.Substring(100);
 
-            List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
+            List<MTRDataCheckPoint> checkPoints = new List<MTRDataCheckPoint>();
 
             for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
             {
                 var checkPointDataPosition = 61 * checkPointNo;
-                var checkPoint = new MTRResponseCheckPoint();
+                var checkPoint = new MTRDataCheckPoint();
                 var codeN = data.Substring(100 + checkPointDataPosition, 1);
                 var timeN = data.Substring(102 + checkPointDataPosition, 2);
                 var info = data.Substring(103 + checkPointDataPosition, 56);
@@ -549,11 +498,45 @@ namespace MTRSerial
             }
 
             var mtrData = ConvertDataStringToTypeData(MTRDataStrings);
-            var listDatas = new List<MTRData>();
+            var listDatas = new List<MTRDataMessage>();
             listDatas.Add(mtrData);
             //WriteValuesToFile(listDatas);
         }
 
+        private void HandleMTRResponseMessage(List<int> rxByteList)
+        {
+            MTRResponse mtrResponse = new MTRResponse
+            {
+                EmitCardNumber = int.Parse(rxByteList[2].ToString("X") + rxByteList[3].ToString("X") + rxByteList[4].ToString("X")),
+                NotInUse1 = rxByteList[5],
+                EmitCardProdWeek = rxByteList[6],
+                EmitCardProdYear = rxByteList[7],
+                NotInUse2 = rxByteList[8]
+            };
+            var cardCheckByte = rxByteList[9];
+
+            if(!CheckModulo(rxByteList.GetRange(2, 8)))
+            {
+                IncreaseCommunicationErrorsCount();
+                throw new Exception("Emit card checksum failed");
+            }
+
+            List<MTRDataCheckPoint> checkPoints = new List<MTRDataCheckPoint>();
+
+            for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
+            {
+                var checkPointDataPosition = 3 * checkPointNo;
+                var checkPoint = new MTRDataCheckPoint();
+                var codeN = rxByteList[checkPointDataPosition];
+                var timeN = rxByteList[checkPointDataPosition + 1] << 8 | rxByteList[checkPointDataPosition + 2];
+
+                checkPoints.Add(new MTRDataCheckPoint { CodeN = codeN, TimeN_s = timeN });
+            }
+
+            mtrResponse.CheckPoints = checkPoints;
+            EmitDataMtrResponse = mtrResponse;
+            OnEmitDataChanged();
+        }
         private void WriteValuesToFile(List<int> data)
         {
             try
@@ -570,9 +553,9 @@ namespace MTRSerial
             }
         }
 
-        private MTRData ConvertDataStringToTypeData(MTRDataString dataString)
+        private MTRDataMessage ConvertDataStringToTypeData(MTRDataMessageString dataString)
         {
-            var mtrData = new MTRData();
+            var mtrData = new MTRDataMessage();
             try
             {
                 mtrData.Preamble = int.Parse(dataString.Preamble); // Ensure the message start with preamble
@@ -590,7 +573,7 @@ namespace MTRSerial
 
                 foreach (string[] checkPonit_s in dataString.CheckPoints)
                 {
-                    var checkPoint = new MTRResponseCheckPoint();
+                    var checkPoint = new MTRDataCheckPoint();
                     checkPoint.CodeN = int.Parse(checkPonit_s[0]);
                     checkPoint.TimeN_s = int.Parse(checkPonit_s[1]);
                     checkPoint.InfoField = checkPonit_s[2];
@@ -605,6 +588,36 @@ namespace MTRSerial
             }
 
             return mtrData;
+        }
+
+
+
+        private bool CheckModulo(List<int> itemsToCheck)
+        {
+            var sum = 0;
+            foreach(var item in itemsToCheck)
+            {
+                sum += item;
+            }
+
+            if(sum % 256 == 0) return true;
+            return false;
+        }
+
+        private void HandleAck(string data)
+        {
+            _waitAck = false;
+            if(_waitingCommunicationCheckAck) _waitingCommunicationCheckAck = false;
+
+            {
+                if(!long.TryParse(data, NumberStyles.Integer, CultureInfo.InvariantCulture, out _lastStsAcknowledgedMs))
+                    return;
+
+                if(_lastStsAcknowledgedMs > 0)
+                {
+                    //MTRResponseData.STSAcknowledgedDelay_ms = _lastStsAcknowledgedMs - _lastKeyPressFromTestStart_ms; // For checking and reporting the time delay between user press and STS
+                }
+            }
         }
 
 

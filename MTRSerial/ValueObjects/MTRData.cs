@@ -1,10 +1,11 @@
 ﻿using System;
+using System.CodeDom;
 using System.Collections.Generic;
 using System.Text;
 
 namespace MTRSerial.ValueObjects
 {
-    public class MTRDataString
+    public class MTRDataMessageString
     {
         public string Preamble { get; set; }
         public string PackageSize { get; set; }
@@ -21,7 +22,7 @@ namespace MTRSerial.ValueObjects
 
     }
 
-    public class MTRData
+    public class MTRDataMessage
     {
         public int Preamble { get; set; }
         public int PackageSize { get; set; }
@@ -34,8 +35,11 @@ namespace MTRSerial.ValueObjects
         public int ProductWeek { get; set; }
         public int ProductYear { get; set; }
         public int ECardHeadSum { get; set; }
-        public List<MTRResponseCheckPoint> CheckPoints { get; set; }
+        public List<MTRDataCheckPoint> CheckPoints { get; set; }
+    }
 
+    public class MTRStatusMessage
+    {
     }
 
     public class MTRResponse
@@ -44,7 +48,7 @@ namespace MTRSerial.ValueObjects
         public int EmitCardProdWeek { get; set; }
         public int EmitCardProdYear { get; set; }
 
-        public List<MTRResponseCheckPoint> CheckPoints { get; set; }
+        public List<MTRDataCheckPoint> CheckPoints { get; set; }
 
         public string CompetitorName { get; set; }
         public string Display1 { get; set; }
@@ -52,5 +56,6 @@ namespace MTRSerial.ValueObjects
         public string Display3 { get; set; }
         public int NotInUse1 { get; set; }
         public int NotInUse2 { get; set; }
+
     }
 }

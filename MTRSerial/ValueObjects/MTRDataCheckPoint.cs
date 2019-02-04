@@ -5,7 +5,7 @@ using System.Text;
 
 namespace MTRSerial.ValueObjects
 {
-    public class MTRResponseCheckPoint
+    public class MTRDataCheckPoint
     {
 
         //The following fields are repeated 50 times:
@@ -21,7 +21,7 @@ namespace MTRSerial.ValueObjects
         public int CheckSum { get; set; }
         public int FillerNull { get; set; }
 
-        public MTRResponseCheckPoint()
+        public MTRDataCheckPoint()
         {
 
         }
