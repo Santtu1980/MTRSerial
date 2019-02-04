@@ -205,6 +205,8 @@ namespace MTRSerial
                     {
                         threw = true;
                     }
+
+                    if (buffer.Count > 234) threw = true;
                 }
                 ParseRxString(buffer);
             }
@@ -505,9 +507,10 @@ namespace MTRSerial
 
         private void HandleMTRResponseMessage(List<int> rxByteList)
         {
+            var emit = rxByteList[4].ToString("X") + rxByteList[3].ToString("X") + rxByteList[2].ToString("X");
             MTRResponse mtrResponse = new MTRResponse
             {
-                EmitCardNumber = int.Parse(rxByteList[2].ToString("X") + rxByteList[3].ToString("X") + rxByteList[4].ToString("X")),
+                EmitCardNumber = int.Parse(emit, System.Globalization.NumberStyles.HexNumber),
                 NotInUse1 = rxByteList[5],
                 EmitCardProdWeek = rxByteList[6],
                 EmitCardProdYear = rxByteList[7],
@@ -536,6 +539,7 @@ namespace MTRSerial
             mtrResponse.CheckPoints = checkPoints;
             EmitDataMtrResponse = mtrResponse;
             OnEmitDataChanged();
+            rxByteList.RemoveRange(0, 230);
         }
         private void WriteValuesToFile(List<int> data)
         {
@@ -624,7 +628,7 @@ namespace MTRSerial
         private bool InitSerialPort()
         {
             // LOGException serialPort.IsOpen
-            if(_serialPort != null && _serialPort.IsOpen && EnsureCommunicationToMTR())
+            if(_serialPort != null && _serialPort.IsOpen)
                 return true;
 
             // LOGException serialPort.IsOpen
@@ -663,15 +667,16 @@ namespace MTRSerial
                     {
                         _serialPort.DataReceived += DataReceived;
                         _serialPort.ErrorReceived += SerialPortErrorReceived;
-                        //success = EnsureCommunicationToMTR();
+
+                        success = true;
                     }
-                    //if(!success && _serialPort.IsOpen)
-                    //{
-                    //    // LOGException serialPort.Close
-                    //    _serialPort.Close();
-                    //}
+                    if(!success && _serialPort.IsOpen)
+                    {
+                        // LOGException serialPort.Close
+                        _serialPort.Close();
+                    }
                 }
-                catch
+                catch (Exception ex)
                 {
                     success = false;
                 }
