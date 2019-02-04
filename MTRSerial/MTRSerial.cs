@@ -1,10 +1,12 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Ports;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Xml.Serialization;
@@ -42,7 +44,6 @@ namespace MTRSerial
 
         private volatile int _communicationErrorsCount;               // Counter for communication errors
         private volatile bool _waitAck;
-        private volatile bool _stsArmed;
         private DateTime _powerUpTime_utc;
         private readonly object _commLock = new object();
         private long _lastStsAcknowledgedMs;
@@ -52,6 +53,7 @@ namespace MTRSerial
 
         public MTRSerialPort()
         {
+            _serialPort = new SerialPort();
         }
 
         /// <summary>
@@ -148,7 +150,7 @@ namespace MTRSerial
         
         /// <summary>
         /// This resets the number of the communication errors
-        /// </summary>
+        /// </summary> 
         private void ResetCommunicationErrorsCount()
         {
             _communicationErrorsCount = 0;
@@ -179,20 +181,30 @@ namespace MTRSerial
             lock(_commLock)
             {
                 var threw = false;
-                while(!threw)
+                while(threw == false)
                 {
                     try
                     {
-                        ParseRxString(_serialPort.ReadLine());
+                        buffer.Add(_serialPort.ReadByte());
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         threw = true;
                     }
                 }
+
+                var temp = new BitArray(new int[]{buffer[0],buffer[1]});
+
+                WriteValuesToFile(buffer);
+                ParseRxString(buffer);
             }
         }
+        public List<int> buffer = new List<int>();
 
+        public void ClearBuffer()
+        {
+            buffer = new List<int>();
+        }
         /// <summary>
         /// Just asking a status to check if connection is ok
         /// </summary>
@@ -308,29 +320,52 @@ namespace MTRSerial
             }
         }
 
-        private void ParseRxString(string rxString)
+        private void ParseRxString(List<int> rxByteList)
         {
-            if(rxString.Length <= 1) // && rxString != @"C")
+            if(rxByteList.Count <= 1) // && rxString != @"C")
             {
                 IncreaseCommunicationErrorsCount();
                 return;
             }
 
-            if (rxString.Substring(0).Equals(255.ToString("X")) &&
-                rxString.Substring(1).Equals(255.ToString("X")) &&
-                rxString.Substring(2).Equals(255.ToString("X")) &&
-                rxString.Substring(3).Equals(255.ToString("X")))
+            var startByte1 = rxByteList[0];
+            var startByte2 = rxByteList[1];
+            var emit1 = rxByteList[2];
+            var emit2 = rxByteList[3];
+            var emit3 = rxByteList[4];
+            var emit4 = rxByteList[5];
+            var notInUse1 = rxByteList[6];
+            var productionWeek = rxByteList[7];
+            var productionYear = rxByteList[8];
+            var notInUse2 = rxByteList[9];
+            var cardCheckByte = rxByteList[10];
+            
+
+            if (startByte1.Equals(32) &&
+                startByte2.Equals(32))
             {
-                // OK
+                List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
+
+                for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
+                {
+                    var checkPointDataPosition = 3 * checkPointNo;
+                    var checkPoint = new MTRResponseCheckPoint();
+                    var codeN = rxByteList[checkPointDataPosition];
+                    var timeN = rxByteList[checkPointDataPosition+1] << 8 | rxByteList[checkPointDataPosition + 2];
+
+                    checkPoints.Add(new MTRResponseCheckPoint{CodeN = codeN, TimeN_s = timeN});
+                }
+                //byte[] name = {rxByteList[160], rxByteList[161], rxByteList[162], rxByteList[163], rxByteList[164], rxByteList[165], rxByteList[166], rxByteList[167], rxByteList[168] }
+                //    .Concat(bytes2).ToArray()};
             }
 
-            var cmd = rxString[6];
-            var data = rxString;
-            if(MTRCommunication != null)
-            {
-                var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
-                MTRCommunication(this, eventArgs);
-            }
+            var cmd = rxByteList[6];
+            var data = string.Join(",", rxByteList);
+            //if(MTRCommunication != null)
+            //{
+            //    var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
+            //    MTRCommunication(this, eventArgs);
+            //}
 
             switch(cmd)
             {
@@ -346,13 +381,12 @@ namespace MTRSerial
             }
             SendKeepAliveIfNecessary();
         }
-        
+
         private void HandleAck(string data)
         {
             _waitAck = false;
             if(_waitingCommunicationCheckAck) _waitingCommunicationCheckAck = false;
-
-            if(_stsArmed)
+            
             {
                 if(!long.TryParse(data, NumberStyles.Integer, CultureInfo.InvariantCulture, out _lastStsAcknowledgedMs))
                     return;
@@ -427,9 +461,9 @@ namespace MTRSerial
             }
 
             var mtrData = ConvertDataStringToTypeData(MTRDataStrings);
-            var listDatas = new List<MTRData>();
-            listDatas.Add(mtrData);
-            WriteValuesToFile(listDatas);
+            //var listDatas = new List<MTRData>();
+            //listDatas.Add(mtrData);
+            //WriteValuesToFile(listDatas);
         }
 
         private void HandleMTRStatusMessage(string data)
@@ -491,15 +525,15 @@ namespace MTRSerial
             var mtrData = ConvertDataStringToTypeData(MTRDataStrings);
             var listDatas = new List<MTRData>();
             listDatas.Add(mtrData);
-            WriteValuesToFile(listDatas);
+            //WriteValuesToFile(listDatas);
         }
 
-        private void WriteValuesToFile(List<MTRData> data)
+        private void WriteValuesToFile(List<int> data)
         {
             try
             {
                 var fileName = @"C:\Temp\mtr.xml";
-                var serializerObj4 = new XmlSerializer(typeof(List<MTRData>));
+                var serializerObj4 = new XmlSerializer(typeof(List<int>));
                 TextWriter writeFileStream4 = new StreamWriter(fileName, false);
                 serializerObj4.Serialize(writeFileStream4, data);
                 writeFileStream4.Close();
@@ -575,27 +609,28 @@ namespace MTRSerial
                     DataBits = ComSettings.DataBits,
                     Parity = ComSettings.Parity,
                     StopBits = ComSettings.StopBits,
-                    DtrEnable = false,
-                    RtsEnable = false,
-                    ReadTimeout = 500,
-                    WriteTimeout = 500,
-                    NewLine = "\r"
+                    //DtrEnable = false,
+                    //RtsEnable = false,
+                    //ReadTimeout = 500,
+                    //WriteTimeout = 500,
+                    //NewLine = "\r"
                 };
                 try
                 {
                     // LOGException serialPort.Open / IsOpen
+                    _serialPort.DtrEnable = true;
                     _serialPort.Open();
                     if(_serialPort.IsOpen)
                     {
                         _serialPort.DataReceived += DataReceived;
                         _serialPort.ErrorReceived += SerialPortErrorReceived;
-                        success = EnsureCommunicationToMTR();
+                        //success = EnsureCommunicationToMTR();
                     }
-                    if(!success && _serialPort.IsOpen)
-                    {
-                        // LOGException serialPort.Close
-                        _serialPort.Close();
-                    }
+                    //if(!success && _serialPort.IsOpen)
+                    //{
+                    //    // LOGException serialPort.Close
+                    //    _serialPort.Close();
+                    //}
                 }
                 catch
                 {
