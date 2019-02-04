@@ -37,4 +37,20 @@ namespace MTRSerial.ValueObjects
         public List<MTRResponseCheckPoint> CheckPoints { get; set; }
 
     }
+
+    public class MTRResponse
+    {
+        public int EmitCardNumber { get; set; }
+        public int EmitCardProdWeek { get; set; }
+        public int EmitCardProdYear { get; set; }
+
+        public List<MTRResponseCheckPoint> CheckPoints { get; set; }
+
+        public string CompetitorName { get; set; }
+        public string Display1 { get; set; }
+        public string Display2 { get; set; }
+        public string Display3 { get; set; }
+        public int NotInUse1 { get; set; }
+        public int NotInUse2 { get; set; }
+    }
 }

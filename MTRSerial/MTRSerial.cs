@@ -166,6 +166,8 @@ namespace MTRSerial
             return _serialPort != null && _serialPort.IsOpen;
         }
 
+        private int xorDF = 223; // Hexadecimal = "DF";
+
         /// <summary>
         /// Event handler when some data received from the serial port
         /// </summary>
@@ -185,15 +187,14 @@ namespace MTRSerial
                 {
                     try
                     {
-                        buffer.Add(_serialPort.ReadByte());
+                        var readByteXOR = _serialPort.ReadByte() ^ xorDF;
+                        buffer.Add(readByteXOR);
                     }
                     catch (Exception ex)
                     {
                         threw = true;
                     }
                 }
-
-                var temp = new BitArray(new int[]{buffer[0],buffer[1]});
 
                 WriteValuesToFile(buffer);
                 ParseRxString(buffer);
@@ -330,56 +331,81 @@ namespace MTRSerial
 
             var startByte1 = rxByteList[0];
             var startByte2 = rxByteList[1];
-            var emit1 = rxByteList[2];
-            var emit2 = rxByteList[3];
-            var emit3 = rxByteList[4];
-            var emit4 = rxByteList[5];
-            var notInUse1 = rxByteList[6];
-            var productionWeek = rxByteList[7];
-            var productionYear = rxByteList[8];
-            var notInUse2 = rxByteList[9];
-            var cardCheckByte = rxByteList[10];
             
 
-            if (startByte1.Equals(32) &&
-                startByte2.Equals(32))
+            if (startByte1.Equals(255) && startByte2.Equals(255))
             {
-                List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
-
-                for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
+                if (rxByteList[2].Equals(255) && rxByteList[3].Equals(255))
                 {
-                    var checkPointDataPosition = 3 * checkPointNo;
-                    var checkPoint = new MTRResponseCheckPoint();
-                    var codeN = rxByteList[checkPointDataPosition];
-                    var timeN = rxByteList[checkPointDataPosition+1] << 8 | rxByteList[checkPointDataPosition + 2];
+                    // Response
+                    var size = rxByteList[5];
+                    var cmd = rxByteList[6];
 
-                    checkPoints.Add(new MTRResponseCheckPoint{CodeN = codeN, TimeN_s = timeN});
+                    var data = string.Join(",", rxByteList);
+                    //if(MTRCommunication != null)
+                    //{
+                    //    var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
+                    //    MTRCommunication(this, eventArgs);
+                    //}
+
+                    switch(cmd)
+                    {
+                        case 'M':
+                            HandleMTRDataMessage(data);
+                            break;
+                        case 'S':
+                            HandleMTRStatusMessage(data);
+                            break;
+                        default:
+                            IncreaseCommunicationErrorsCount();
+                            break;
+                    }
                 }
-                //byte[] name = {rxByteList[160], rxByteList[161], rxByteList[162], rxByteList[163], rxByteList[164], rxByteList[165], rxByteList[166], rxByteList[167], rxByteList[168] }
-                //    .Concat(bytes2).ToArray()};
+                else
+                {
+                    MTRResponse mtrResponse = new MTRResponse();
+                    mtrResponse.EmitCardNumber = int.Parse(rxByteList[2].ToString("X") + rxByteList[3].ToString("X") + rxByteList[4].ToString("X"));
+                    mtrResponse.NotInUse1 = rxByteList[5];
+                    mtrResponse.EmitCardProdWeek = rxByteList[6];
+                    mtrResponse.EmitCardProdYear = rxByteList[7];
+                    mtrResponse.NotInUse2 = rxByteList[8];
+                    var cardCheckByte = rxByteList[9];
+
+                    if (!CheckModulo(rxByteList.GetRange(2, 8)))
+                    {
+                        IncreaseCommunicationErrorsCount();
+                        throw new Exception("Emit card checksum failed");
+                    }
+
+                    List<MTRResponseCheckPoint> checkPoints = new List<MTRResponseCheckPoint>();
+
+                    for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
+                    {
+                        var checkPointDataPosition = 3 * checkPointNo;
+                        var checkPoint = new MTRResponseCheckPoint();
+                        var codeN = rxByteList[checkPointDataPosition];
+                        var timeN = rxByteList[checkPointDataPosition+1] << 8 | rxByteList[checkPointDataPosition + 2];
+
+                        checkPoints.Add(new MTRResponseCheckPoint{CodeN = codeN, TimeN_s = timeN});
+                    }
+
+                    mtrResponse.CheckPoints = checkPoints;
+                }
             }
 
-            var cmd = rxByteList[6];
-            var data = string.Join(",", rxByteList);
-            //if(MTRCommunication != null)
-            //{
-            //    var eventArgs = new MTRCommandEventArgs { Command = cmd.ToString(), Data = data, Identifier = @"IN", DebugText = "debug" };
-            //    MTRCommunication(this, eventArgs);
-            //}
-
-            switch(cmd)
-            {
-                case 'M':
-                    HandleMTRDataMessage(data);
-                    break;
-                case 'S':
-                    HandleMTRStatusMessage(data);
-                    break;
-                default:
-                    IncreaseCommunicationErrorsCount();
-                    break;
-            }
             SendKeepAliveIfNecessary();
+        }
+
+        private bool CheckModulo(List<int> itemsToCheck)
+        {
+            var sum = 0;
+            foreach (var item in itemsToCheck)
+            {
+                sum += item;
+            }
+
+            if (sum % 256 == 0) return true;
+            return false;
         }
 
         private void HandleAck(string data)
