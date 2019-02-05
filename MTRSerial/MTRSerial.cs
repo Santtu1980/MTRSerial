@@ -188,32 +188,37 @@ namespace MTRSerial
             {
                 int lastReadByte = 0;
                 var startFound = false;
-                var threw = false;
-                while(threw == false)
+                var stopReading = false;
+                while(stopReading == false)
                 {
                     try
                     {
-                        if(_serialPort.BytesToRead < 1) threw = false;
                         var readByteXor = _serialPort.ReadByte() ^ xorDF;
 
                         if (lastReadByte.Equals(255) && readByteXor.Equals(255))
                         {
+                            buffer.Add(lastReadByte);
                             startFound = true;
                         }
                         if(startFound)
                         {
                             buffer.Add(readByteXor);
-                            if (buffer.Count > 217) threw = true;
+                            if (buffer.Count > 217) stopReading = true;
                         }
-
-                        lastReadByte = readByteXor;
+                        else
+                        {
+                            lastReadByte = readByteXor;
+                        }
                     }
-                    catch (Exception ex)
+                    catch
                     {
-                        threw = true;
+                        stopReading = true;
                     }
                 }
+                
+                Console.WriteLine(buffer.Count);
                 ParseRxString(buffer);
+                buffer.Clear();
             }
         }
 
@@ -502,10 +507,16 @@ namespace MTRSerial
                 checkPoints.Add(new MTRDataCheckPoint { CodeN = codeN, TimeN_s = timeN });
             }
 
-            _lastEmitRead = mtrResponse.EmitCardNumber;
-            mtrResponse.CheckPoints = checkPoints;
-            EmitDataMtrResponse = mtrResponse;
-            OnEmitDataChanged();
+            if(_lastEmitRead != mtrResponse.EmitCardNumber)
+            {
+                mtrResponse.CheckPoints = checkPoints;
+                EmitDataMtrResponse = mtrResponse;
+                OnEmitDataChanged();
+            }
+            else
+            {
+                _lastEmitRead = mtrResponse.EmitCardNumber;
+            }
         }
 
         private MTRDataMessage ConvertDataStringToTypeData(MTRDataMessageString dataString)
