@@ -479,6 +479,8 @@ namespace MTRSerial
 
         private void HandleMTRResponseMessage(List<int> rxByteList)
         {
+            SaveToFile();
+
             var emit = rxByteList[4].ToString("X") + rxByteList[3].ToString("X") + rxByteList[2].ToString("X");
             MTRResponse mtrResponse = new MTRResponse
             {
@@ -498,12 +500,26 @@ namespace MTRSerial
 
             List<MTRDataCheckPoint> checkPoints = new List<MTRDataCheckPoint>();
 
+            // Try to find starting zeros
+            // ie. three zeros in a row
+            var moveBitsFromStart = 10;
+            if (rxByteList[10] == 0 && rxByteList[11] == 0 && rxByteList[12] == 0)
+                moveBitsFromStart = 10;
+            else if (rxByteList[11] == 0 && rxByteList[12] == 0 && rxByteList[13] == 0)
+                moveBitsFromStart = 11;
+            else if (rxByteList[12] == 0 && rxByteList[13] == 0 && rxByteList[14] == 0)
+                moveBitsFromStart = 12;
+
             for(int checkPointNo = 0; checkPointNo < 50; checkPointNo++)
             {
-                var checkPointDataPosition = 3 * checkPointNo;
+                Console.WriteLine("Move bits = " + moveBitsFromStart);
+                var checkPointDataPosition = 3 * checkPointNo + moveBitsFromStart;
                 var codeN = rxByteList[checkPointDataPosition];
                 var timeN = int.Parse(rxByteList[checkPointDataPosition + 2].ToString("X") + rxByteList[checkPointDataPosition + 1].ToString("X"), NumberStyles.HexNumber);
 
+                Console.WriteLine(">>" + codeN);
+                if (codeN == 100)
+                    mtrResponse.FinalResult = timeN;
                 checkPoints.Add(new MTRDataCheckPoint { CodeN = codeN, TimeN_s = timeN });
             }
 
@@ -626,7 +642,15 @@ namespace MTRSerial
             }
             return success;
         }
-        
+
+
+        private void SaveToFile()
+        {
+            var serializerObj4 = new XmlSerializer(typeof(List<int>));
+            TextWriter writeFileStream4 = new StreamWriter(@"C:\Users\Public\temp.xml");
+            serializerObj4.Serialize(writeFileStream4, buffer);
+            writeFileStream4.Close();
+        }
         private MTRCommandEventArgs CreateInfoArgs(string message)
         {
             return new MTRCommandEventArgs

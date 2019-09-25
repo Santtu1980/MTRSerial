@@ -50,6 +50,8 @@ namespace MTRSerial.ValueObjects
 
         public List<MTRDataCheckPoint> CheckPoints { get; set; }
 
+        public int FinalResult { get; set; }
+
         public string CompetitorName { get; set; }
         public string Display1 { get; set; }
         public string Display2 { get; set; }
