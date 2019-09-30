@@ -1,9 +1,12 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.28307.329
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29230.47
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MTRSerial", "MTRSerial\MTRSerial.csproj", "{74243A46-8164-4D80-BE1D-276FFB0D17EC}"
+	ProjectSection(ProjectDependencies) = postProject
+		{C0523116-F306-4F02-9416-CA6E57CB54DA} = {C0523116-F306-4F02-9416-CA6E57CB54DA}
+	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniEmitResults", "..\MiniEmitResults\MiniEmitResults\MiniEmitResults.csproj", "{C0523116-F306-4F02-9416-CA6E57CB54DA}"
 EndProject
